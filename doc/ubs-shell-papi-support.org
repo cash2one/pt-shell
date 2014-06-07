@@ -1,0 +1,171 @@
+#+TITLE:     PAPI支持
+#+AUTHOR:    Peng Tao
+#+EMAIL:     pengtao@baidu.com
+#+DATE:      < 2013-12-18 >
+#+LANGUAGE:  en
+#+TEXT:      papi，udw，getjobinfo
+#+OPTIONS:   H:3 num:t toc:t \n:nil @:t ::t |:t ^:t -:t f:t *:t TeX:t LaTeX:nil skip:nil d:nil tags:not-in-toc
+#+OPTIONS:   ^:{}
+#+INFOJS_OPT: view:info toc:1 ltoc:t mouse:underline buttons:0 path:org-info.js
+#+LINK_UP:   
+#+LINK_HOME: 
+#+STYLE:    <link rel="stylesheet" type="text/css" href="mystyles.css" />
+
+* 背景知识
+
+这份文档介绍ubs_shell对PAPI编程的支持。所以假定你对ubs_shell有所了解。
+
+如果不了解，请参考 http://cq01-2012h1-3-uptest3.vm.baidu.com:8080/ubs_shell/ubs-shell-tutorial.html
+
+其次，你必须要对UDW的相关概念， queryengine和PAPI， 有所了解。 
+
+我们习惯的日志是存放在HDFS上的文本文件，UDW可以理解为HDFS上存放的二进制数据库文件。
+
+1. queryengine类比于mysql客户端，可以用来查看表信息，表的字段信息和数据sample。
+   1. 学习入口： http://bigdata.baidu.com/magi/
+2. papi可以理解为一个特殊的inputformat，在mapreduce程序中访问UDW的表数据。
+   1. 学习入口： http://wiki.babel.baidu.com/twiki/bin/view/Com/Inf/UDW_PAPI
+
+
+
+
+* ubs_shell 对PAPI的支持
+
+** 实例模式
+
+第一个PAPI程序如下。 参考[[./demo4.py]].
+
+#+begin_src python
+from ubs_shell.job import Job, MJob, PJob
+
+Job.log_file = "tmp.pengtao.shell.log"
+MJob.hadoop_home = "/home/work/hadoop-client-stoff"
+PJob.papi_java_lib = "/home/work/ubs/lib/papi"
+PJob.udw_meta_server = "xxxxx"
+PJob.udw_user = "xxxxx"
+
+if __name__=='__main__':
+    B = PJob()
+    
+    B.input_project  = "udwetl_snapshotclick.event_day=%s.event_hour=04" % "20131223"
+    B.input_cols     = "event_baiduid,event_time,event_ip,event_query,event_urlparams"
+    B.input_info_file = "b-info-file"    
+    B.get_job_info()
+    
+    B.command        = "streaming"
+    B.input          = "happy"  # input参数是hadoop客户端需要的。但papi输入通过input_info_file获取，input实际不生效
+    B.output         = "/tmp/ubs/output/%s" % random.randint(0, 10000)
+    B.mapper         = "cat"
+    B.reducer        = "cat"
+    B.files          = [B.input_info_file]
+    B.priority       = "VERY_HIGH"
+    B.map_tasks      = 3    
+    print B.to_formatted_string()
+    B.run()
+
+#+end_src
+
+程序解释：
+1. PAPI的封装是PJob类（PAPI Job）
+   1. from ubs_shell.job import PJob
+2. PJob依赖信息
+   1. hadoop_home等依赖和MJob一致
+   2. PAPI特有依赖和配置信息
+	  1. PJob.papi_java_lib表示PAPI依赖的java库所在位置。
+	  2. PJob.udw_meta_server 是udw表的meta server路径
+      3. PJob.udw_user 是用户名
+3. PAPI的执行过程分为两部分，
+   1. B.get_job_info()， 获取数据表数据信息，这是比普通MR计算多出来的一步。
+	  1. 后台执行： java udw-program-api.jar GetJobInfo -user xxxx -server xxxx -inputProj xxx -inputCols xxx -ifile xxxx
+	  2. 相关配置包括：input_project, input_cols, input_info_file ，含义自明，见PAPI的教程。
+   2. B.run()，提交hadoop计算任务
+	  1. 后台执行 hadoop streaming
+	  2. 相关配置参考PAPI教程
+
+
+请特别注意权限问题，这是papi程序经常踩到的一个坑。
+
+PAPI同时读取udw表和HDFS文本文件的demo如下：
+#+begin_src python
+C = PJob()
+
+C.input_project  = "udwetl_snapshotclick.event_day=%s.event_hour=04" % (datetime.now() - timedelta(days=3)).strftime("%Y%m%d")
+C.input_cols     = "event_baiduid,event_time,event_ip,event_query,event_urlparams"
+C.input_info_file = "c-info-file"
+C.get_job_info()
+
+C.command        = "streaming"
+C.input          = "happy"  # input参数是hadoop客户端需要的。但papi输入通过input_info_file获取，input实际不生效
+C.output         = "/tmp/ubs/output/%s" % random.randint(0, 10000)
+C.mapper         = "cat"
+C.reducer        = "cat"
+C.files          = [C.input_info_file]
+C.priority       = "VERY_HIGH"
+C.reduce_tasks   = 3
+C.map_tasks      = 10    
+C.input_other_num = 2
+C.input_other_cfgs = [ ("/log/20682/bws_access/20131203/0000/szwg-ecomon-hdfs.dmop/2350/tc-www-ipv6pr0.tc.baidu.com_20131203235000.log",
+                            "org.apache.hadoop.mapred.TextInputFormat"),
+                        "/log/20682/browser_log_to_stoff/20131209/2100/hz01-sw-dr00.hz01/201312092155.txt"]
+C.optional       = ["-jobconf udw.mapred.combine.inputformat=true"]
+print C.to_formatted_string()
+C.run()
+#+end_src
+
+程序解释：
+1. 需要同时读入HDFS文件时，关键配置
+   1. input_other_num:  读入hdfs路径的数量
+   2. input_other_cfgs: 读入其他hdfs文件的具体配置，格式为
+	  1. [cfg1, cfg2, ..., cfgn], 列表的元素数量与input_other_num一致。
+	  2. 每一个cfgx可以为两种格式
+		 1. （path， input_format)： 2元组，表示输入路径和input_format
+		 2. 字符串： 表示输入路径， 默认TextInputFormat
+2. get_job_info和run方法不变。
+
+** shell模式
+
+PJob也支持shell模式，与MJob一样, 下面是一个demo. 参考 [[./demo5.py]]
+
+
+#+begin_src python
+from ubs_shell.job import Job, MJob, PJob
+from ubs_shell.router import router
+        
+@router("job1")
+class SimplePAPIJob(PJob):
+    """
+    demo of PAPI    
+    """
+    def config(self, date):
+        self.input_project  = "udwetl_snapshotclick.event_day=%s.event_hour=04" % date
+        self.input_cols     = "event_baiduid,event_time,event_ip,event_query,event_urlparams"
+        self.input_info_file = "tmp-info-file"
+        
+        self.command        = "streaming"
+        self.inputs         = "happy"  # make hadoop happy
+        self.output         = "/tmp/ubs/output/%s" % random.randint(0, 10000)
+        self.mapper         = "cat"
+        self.reducer        = "cat"
+        self.files          = [self.input_info_file]
+        self.priority       = "VERY_HIGH"
+        self.reduce_tasks   = 3
+        self.map_tasks      = 10    
+        self.optional       = ["-jobconf udw.mapred.combine.inputformat=true"]
+        
+if __name__=='__main__':
+    router.main()
+#+end_src
+
+
+与MJob任务一样，继承PJob类， 重载config接口。即可使用shell模式。
+
+
+
+* Footnotes
+
+
+
+
+
+
+

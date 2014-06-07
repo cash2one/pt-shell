@@ -1,0 +1,429 @@
+#+TITLE:     ubs_shell教程
+#+AUTHOR:    Peng Tao
+#+EMAIL:     pengtao@baidu.com
+#+DATE:      < 2013-12-17 >
+#+LANGUAGE:  en
+#+TEXT:      脚本管理，调研，框架
+#+OPTIONS:   H:3 num:t toc:t \n:nil @:t ::t |:t ^:t -:t f:t *:t TeX:t LaTeX:nil skip:nil d:nil tags:not-in-toc
+#+OPTIONS:   ^:{}
+#+INFOJS_OPT: view:info toc:1 ltoc:t mouse:underline buttons:0 path:org-info.js
+#+LINK_UP:   
+#+LINK_HOME: 
+#+STYLE:    <link rel="stylesheet" type="text/css" href="mystyles.css" />
+
+* 最简教程
+
+进入一个调研项目的目录, 你是否有这样的经验：
+    1. 看着几十个脚本文件，努力回想每个脚本是干啥的。下次记得多写几个run1.py, run2.py, run3.py吧 ...
+	2. 需要重新启动某一步计算，只能阅读代码，了解配置和输入输出。
+
+ 让ubs_shell来拯救你！
+
+ubs_shell是一个极轻量的脚本框架，提供一种写run.py(all.py)的方法， 完全不增加配置文件， 充分利用python的语言特性，对hadoop job和 local job（python函数）进行管理， *突出任务主干* ，更易理解，更易启动。 
+ubs_shell是纯python方式， 任何测试机上都可以快速安装。
+
+** 安装
+
+在新的测试机 szjjh-uptest6.szjjh01.baidu.com 上有安装好的ubs_shell环境，如果你比较心急，可以直接试用， 忽略安装部分的内容。
+
+顺便推广一下szjjh测试机，降低log0/log1压力。
+
+安装依赖于setuptools，如果你的python没有，得先装上：
+#+begin_src shell-script
+wget ftp://cq01-2012h1-3-uptest3.vm.baidu.com/home/work/pengtao/projects/20131210-ubs-shell-tutorial/release/setuptools-0.7.7.tar.gz
+tar -xvzf setuptools-0.7.7.tar.gz
+cd setuptools-0.7.7
+python setup.py install
+#+end_src
+
+ubs_shell的安装如下，足够简单吧？
+#+begin_src shell-script
+wget ftp://cq01-2012h1-3-uptest3.vm.baidu.com/home/work/pengtao/projects/20131210-ubs-shell-tutorial/release/ubs_shell.tar.gz
+tar -xvzf ubs_shell.tar.gz
+cd ubs_shell
+python setup.py install
+#+end_src
+
+
+** Hello world ！
+
+第一个ubs_shell程序是这样的：
+#+begin_src python
+import random
+from ubs_shell.job import MJob
+
+MJob.hadoop_home = "/home/work/hadoop-client-stoff"
+
+if __name__=='__main__':
+            
+    A = MJob()
+    
+    A.command  = "streaming"
+    A.inputs   = "/ps/ubs/pengtao/20131210-ubs-shell-tutorial/input/data1"
+    A.output   = "/tmp/ubs/pengtao/output/%s" % random.randint(0, 10000)
+    A.mapper   = "cat"
+    A.reducer  = "cat"
+    
+    A.run()
+#+end_src
+
+这是ubs_shell最基本的功能，是否看着有点眼熟？
+
+组内一些同学在使用HadoopJobProducer.py。这里的用法与之类似，但是语法更简洁，任务（MJob = MapReduce Job)的结构和关键信息更清晰。
+
+下面是更繁琐一点的demo，展现了MJob完整的可配参数。见[[./demo1.py]]
+#+begin_src python
+from ubs_shell.job import Job, MJob
+
+Job.log_file = "tmp.pengtao.shell.log"
+MJob.hadoop_home = "/home/work/hadoop-client-stoff"
+
+if __name__=='__main__':
+            
+    A = MJob(hadoop_home="/home/work/hadoop-client-rank")
+    A.command     = "streamoverhce"
+    A.inputs      = [ "/ps/ubs/pengtao/20131210-ubs-shell-tutorial/input/data1",
+                      "/ps/ubs/pengtao/20131210-ubs-shell-tutorial/input/data2"]
+    A.output      = "/tmp/ubs/pengtao/output/%s" % random.randint(0, 10000)
+    A.mapper      = "cat"
+    A.reducer     = "cat"
+    A.input_format  = "org.apache.hadoop.mapred.TextOutputFormat"
+    A.output_format = "org.apache.hadoop.mapred.TextOutputFormat"
+    A.map_tasks     =  2
+    A.reduce_tasks  =  1
+    A.map_capacity  = 10
+    A.reduce_capacity = 10
+    A.priority    = "VERY_HIGH"
+    A.job_name    = "ubs_shell.demo.streaming.simple.cat"
+    A.optional    = ["-jobconf mapred.min.split.size=20000000000",
+                     "-jobconf abaci.split.remote=true"]
+    A.files       = []  # ["a.py", "b.py"]
+
+    print A.to_formatted_string()
+
+    A.run()
+#+end_src
+
+整个demo的含义自明，补充一点说明：
+    1. MJob支持to_formatted_string方法，返回后台执行的shell命令串，方便在其他环境调用（比如copy给其他不用ubs_shell的同学。。。）
+	2. Job（local job）提供了一个logger，将执行信息打印到 Job.log_file中。
+	   1. MJob(MapReduce Job)从Job继承来，默认开启logging机制。无需任何配置，程序后台执行时也可以了解运行状况。
+	   2. log_file不影响stdout/stderr输出，信息同时输出，两者完全一致。logger的使用详见“更多”章节。
+
+hello world展现了ubs_shell最基本的使用方法，但这种写法并不推荐。
+
+
+* 更合理的使用方法： 派生类
+
+ubs_shell *强烈推荐* 的程序风格是这样的, 详见 [[./demo2.py]]
+#+begin_src python
+import random
+
+from ubs_shell.job import Job, MJob
+from ubs_shell.utils import hadoop_cmd
+
+MJob.hadoop_home = "/home/work/hadoop-client-stoff"
+
+class SimpleCatDemoData(MJob):
+    """
+    mapper将输入cat， reducer再cat输出
+    """
+    def config(self, fn, rand):
+        self.command  = "streaming"
+        self.inputs    = "/ps/ubs/pengtao/20131210-ubs-shell-tutorial/input/%s" % fn
+        self.output   = "/tmp/ubs/pengtao/output/%s" % rand
+        self.mapper   = "cat"
+        self.reducer  = "cat"
+
+class SimpleGrepDemoData(MJob):
+    """
+    mapper进行grep，reducer直接cat输出。
+    """
+    def config(self, date):
+        self.command  = "streaming"
+        self.inputs    = "/log/20682/newcookiesort/%s/0000/szwg-*-hdfs.dmop/part-00000" % date
+        self.output   = "/tmp/ubs/pengtao/output/%s" % random.randint(0, 10000)
+        self.mapper   = "grep tudou; cd ."
+        self.reducer  = "cat"    
+        self.map_tasks =  3
+        self.reduce_tasks =  1
+        self.map_capacity = 10
+        self.reduce_capacity = 10
+        self.priority = "VERY_HIGH"
+        self.job_name = "ubs_shell-demo-mapper-grep-reducer-cat"
+        
+
+class DownloadHdfsOutput(Job):
+    """
+    local job，下载第一个MJob输出的文件
+    """
+    #----------------------------------------------------------------------
+    def config(self, rand):
+        self.hdfs_path = "/tmp/ubs/pengtao/output/%s" % rand
+        self.local_path = "./local_bak"
+        
+    #----------------------------------------------------------------------
+    def run(self):
+        """"""
+        cmds = ["dfs", "-get", self.hdfs_path, self.local_path]
+        hadoop_cmd(cmds, hadoop=MJob.hadoop_home)
+        
+if __name__=='__main__':
+    
+    fn = "data1"
+    rand = random.randint(0, 10000)
+    
+    a = SimpleCatDemoData()
+    a.config(fn, rand)
+    a.run()
+    
+    b = DownloadHdfsOutput()
+    b.config(rand)
+    b.run()
+    
+    c = SimpleGrepDemoData()
+    c.config("20131202")
+    c.run()
+#+end_src
+
+推荐的方法希望将每个job都定义一个派生类：
+1. 将每个job的具体配置定义在MJob/Job派生类中。回忆一下helloworld程序的风格: 先产生成实例（instance），再定义配置。
+   #+begin_src python
+   A = MJob()
+   A.command = "streaming"
+   A.input   = /to/my/hdfs/path
+   ...
+   A.run()
+   #+end_src
+2. 必须重载config函数
+   1. config函数内仅存放job的配置信息，另外，最好将所有配置都放在这里。
+   2. config的参数可以对应日志路径，或者时间。多次运行时进行调整。
+
+新方法的一些好处：
+1. 充分利用python的语法特性。
+   1. 比如docstring, 方便给任务写comments
+   2. 比如缩进，可以highlight脚本内的任务。demo2.py脚本在editor不同的缩进下，结构很清楚：
+     | *完全缩进*                                                                                                           | *部分缩进*                                                                                                           |
+     |----------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------|
+     | [[./images/ubs-shell-tutorial.org_20131218_090711_4796OK0.png]] | [[./images/ubs-shell-tutorial.org_20131218_091725_4796aoP.png]]       |
+
+2. 不同的派生类更易于自由组合，完成新的pipeline。
+   1. demo2.py在__main__的中的代码提供了一个参考
+   2. 新开一个python，对已有job进行调用也很方便。
+     #+begin_src python
+     from demo2 import SimpleGrepDemoData
+     job = SimpleGrepDemoData()
+     job.config("20131220")
+     job.run()
+     #+end_src
+
+新风格本质上就是要求job不依赖于config接口外的其他参数, 这为job的统一管理提供了可能。
+
+所以它最大的好处在下一个章节： *统一注册* ，交互式查看/调用。
+
+* 交互式调用
+
+对Job进行交互式执行，这是在实践中最常见的使用方式。用户启动脚本，进入一个类似于shell的环境：
+  1. 查看job列表，
+  2. 执行单个job，
+  3. 查看帮助信息。 
+
+类shell环境提供了命令和job name的 *自动补全* ，使用很方便。 
+
+这也是工具起名ubs_shell的原因。
+
+** 进入shell
+
+将[[./demo2.py]]进行修改，成为[[./demo3.py]]. 如下命令都可以直接进入ubs_shell环境
+#+begin_src shell-script
+python demo3.py
+python demo3.py shell
+#+end_src
+
+[[./demo3.py]]相对于[[./demo2.py]]的主要修改如下：
+#+begin_src python
+from ubs_shell.router import router
+
+@router("cat")
+class SimpleCatDemoData(MJob):
+    ...
+@router("grep")
+class SimpleGrepDemoData(MJob):
+    ...
+@router("download")
+class DownloadHdfsOutput(Job):
+    ...
+
+@router("msg")
+def print_welcome_msg(msg, title="Mr. ubs"):
+	""" simplely print msg with the title"""
+    print "Hello %s" % title
+    print "%s" % msg
+        
+if __name__=='__main__':
+    router.main()    
+#+end_src
+
+
+主要修改的包括：
+1. import全局变量router。
+2. 将Job/MJob在router中进行注册
+   1. 注册借用了python的decorator机制。
+	  1. @router("grep")： 为SimpleGrepDemoData在router中注册了一个全局唯一的名字grep。
+   2. 简单python函数可以注册，参考@router("msg") --> print_welcome_msg
+3. 在"__main__"空间添加 router.main
+   1. router.main负责处理命令行参数并执行， 无参数则进入shell。
+   2. main可以调用shell，打印help，或者直接run任务（参考下章“命令行调用”）
+
+** shell环境的使用
+
+
+在ubs_shell环境中， 一个典型使用过程类似于：
+
+1. *ls* ：查看job列表
+   1. [[./images/ubs-shell-tutorial.org_20131218_095858_4796nyV.png]]
+   2. ls的输出包括：
+	  1. 所有任务的注册名字，grep，download。是上节介绍的代码 @router("grep")实现的。
+	  2. 作业类型： [ Job]-本地任务，[MJob]- MR任务，[func]-简单python函数
+	  3. 任务名对应的类和配置接口config，以及config的输入参数。注册名通常简短，类名可以长一些，提供关于job的更多信息。
+2. *info* ：查看某个job的详细说明
+   1. [[./images/ubs-shell-tutorial.org_20131218_100340_479608b.png]]
+   2. info job-name 给出了某个Job更详细的说明，包括
+	  1. ls中列举的基本信息
+	  2. Job对应class的docstring
+	  3. class的config接口的source code。所以config函数最好包括所有的配置信息，且只包含配置信息。
+3. *run* ：执行一个job或者函数
+   1. run的使用方法为 run jobname [ARG]
+   2. [[./images/ubs-shell-tutorial.org_20131218_103124_4796BHi.png]]
+   3. 所有的[ARG](如果存在），都会传给jobname对应派生类的config函数。参数最好都是string类型（不支持空格），允许的参数形式有：
+	  #+begin_example
+	  (ubs): run cat data1 12334
+	  (ubs): run cat --fn=data1 --rand=12334
+      (ubs): run cat --fn data1 --rand 12334
+      (ubs): run cat data1 --rand 12334
+      (ubs): run grep --date=20131212
+	  #+end_example
+   4. 执行过程的信息都会在屏幕上显示，并打印到后台的Job.log_file
+4. *dfs* ：将输出文件下载到本地
+   1. [[./images/ubs-shell-tutorial.org_20131218_104746_4796ORo.png]]
+   2. shell中的dfs命令封装了hadoop dfs，所以简单的数据查看可以在ubs_shell中进行。
+	  1. dfs -get = hadoop dfs -get
+	  2. dfs -tail = hadoop dfs -tail
+	  3. dfs -ls = hadoop dfs -ls
+
+
+ls，info，run，dfs呈现了一个完整的过程。 
+
+ubs_shell支持的其他命令包括：
+
+1. *debug*
+   1. debug命令的用法与run基本一致。差别在于MR任务使用debug时，会自动从input路径中抽取少量part（默认1个）作为输出，输出到一个临时目录。
+   2. 完全不改动脚本的条件下， debug可以用来调试程序，或者采样一个较小的数据集计算结果。默认以VERY_HIGH提交，快速获得结果。
+   3. 一次debug的例子：
+	  1. debug的input和output在屏幕上打印出来，显示告知用户。
+	  2. [[./images/ubs-shell-tutorial.org_20131218_110928_4796bbu.png]]
+   4. 可以控制debug的采样数量和task数量(默认都是1）
+	  1. [[./images/ubs-shell-tutorial.org_20131218_134427_6048UGl.png]]
+   5. 从input路径中抽取少量part的过程是多次调用hadoop fs -ls命令，有一些复杂的策略。
+	  1. 假设一个目录结构是： /log/20682/querylog/$date/0000
+	  2. 基本的idea是-ls /log/20682/querylog 比 ls /log/20682/querylog/* 要快很多，虽然两者返回的结果数量一致。
+	  3. 多次调用fs -ls的过程是深度优先，层级很深的通配符可能找不到对应文件。
+		 1. 后台有一些简单traceback机制和容错机制， 比如不要将一个done标志文件作为采样结果。
+		 2. 采样结果异常，最好手动修改job的input，通配符层次不要太多。
+		  #+begin_example
+          /log/20682/ps_bz_log_dump/20130501/*/szwg-*-hdfs.dmop/????/cq01-ps-*.log			
+		  #+end_example
+2. *queue* 
+   1. 如果要在ubs_shell中执行多步任务，比如计算多天的数据，可以用queue。
+   2. queue的用法参考了lftp的queue命令
+	  1. help queue的帮助信息
+		 1. [[./images/ubs-shell-tutorial.org_20131218_112830_4796avD.png]]
+	  2. 一个add, add, add, start的执行过程
+		 1. [[./images/ubs-shell-tutorial.org_20131218_112724_4796ol0.png]]
+   3. queue只支持顺序执行，更复杂的控制流，不要在shell中交互执行了，直接写python吧。。。
+3. *string*
+   1. 对MR类型的任务，打印后台执行的shell命令串。参数传递方法同run命令。
+	  1. [[./images/ubs-shell-tutorial.org_20131218_113104_4796n5J.png]]
+4. *help*
+   1. ubs_shell，所有的命令都有帮助信息，方便大家使用
+   2. help， 查看所有可用命令help cmd， 查看特定命令的帮助。
+	  1. [[./images/ubs-shell-tutorial.org_20131218_113341_47960DQ.png]]
+
+shell是ubs_shell最方便的使用方式，enjoy~
+
+* 命令行调用
+
+交互式调用的脚本可以一字不改，在命令行(bash)中进行调用.
+
+#+begin_src shell-script
+python demo3.py help
+python demo3.py help grep
+#+end_src
+以上命令打印脚本帮助，打印grep的帮助。等价于在ubs_shell中执行info grep。
+
+执行某个任务。
+#+begin_src schell-script
+# 语法 : python SCRIPT run NAME [[ARG1] [ARG2] ...]
+python demo3.py run  cat data1 12345
+for date in 20131211 20131212 20131213 ; do
+    python demo3.py run grep $date
+done
+#+end_src
+方法等价于在ubs_shell中的run命令， 所以参数的格式要求也一样。
+
+
+* 更多使用
+
+** logger
+
+MJob的run会调用logger记录hadoop的执行信息。如果用户希望控制日志信息，可以按照如下方式使用
+#+begin_src python
+Job.loglevel = logging.DEBUG
+Job.log_file = "tmp.my.demo.log"
+class MyMJob(MJob):
+    """
+    explanation here
+    """
+    def config(self, arg):
+        ...
+    def run(self):
+        MJob.run(self)
+        # 打印信息类似： 2013-12-18 11:08:08,760-[MyMJob]-[INFO]: to do more
+        self._logger.info("to do more")
+
+        # 打印信息类似： 2013-12-18 11:08:08,760-[MyMJob]-[DEBUG]: code detail
+        self._logger.debug("code detail")
+
+        # 开启raw信息打印
+        # I'm here
+        self._raw_log(True)
+        self._logger.debug("I'm here")
+        self._raw_log(False)
+       
+#+end_src
+
+logger的信息会同时打印在屏幕和log_file中
+
+
+** 后续TODO
+
+列在这里，后续完善
+1. ubs的很多调研是运行一个现成的任务模型（zhixin，展现实验， interleaving实验等）。框架足够灵活，可以将这些现成的任务模型封装为特殊的任务类型，在ubs_shell中使用。
+2. 一些小TODO, 大多锦上添花，视需要添加。
+   1. 添加PAPI的debug支持，类似于streaming方式的单part。
+   2. logger提供关闭屏幕的配置。
+   3. shell环境可以配置dfs命令的不同hadoop_home。
+   4. 给job_name添加dpf的TAG支持
+   5. 支持 MJob.cacheAchives = []
+   6. shell环境的输出添加color支持，特别是在ls，info以及string命令的输出
+   7. shell中支持"hello world!" 作为一个参数传递给job
+
+
+* Footnotes
+
+
+
+
+
+
+
