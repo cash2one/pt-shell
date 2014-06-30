@@ -154,7 +154,7 @@ class Job(object):
             for i in range(-1, -len(defaults)-1, -1):
                 varnames[i] += _decode("=%s" % repr(defaults[i]))
         # È¥µôself
-        if varnames[0] == 'self':
+        if varnames and varnames[0] == 'self':
             varnames = varnames[1:]
         sz = "%s < %s >" % (func.func_name, ", ".join(varnames))
         return prefix + sz

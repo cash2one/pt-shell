@@ -42,3 +42,5 @@
 	14. 在papi方式下，col为空表示所有字段，但框架不允许为空。
 	15. papi需要-file xxxx-info-file。考虑框架自动添加一个。（如果streaming -file A -file A是OK的）
 	16. 在多次执行Job.run()的时候，会多次输出屏幕日志。 可能多次addlogger
+	17. 帮助中包含非ascii字符： UnicodeEncodeError: 'ascii' codec can't encode characters in position 8-25: ordinal not in range(128)
+
